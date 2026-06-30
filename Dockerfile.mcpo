@@ -1,0 +1,30 @@
+﻿# Custom image: mcpo + MCP servers: paper_search, citecheck, sequential_thinking, memory, sympy.
+FROM python:3.12-slim
+
+ENV DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      git curl ca-certificates gnupg && \
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
+    rm -rf /var/lib/apt/lists/*
+
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh
+ENV PATH="/root/.local/bin:${PATH}"
+
+WORKDIR /app
+
+RUN git clone --depth 1 https://github.com/sdiehl/sympy-mcp /app/sympy-mcp && \
+    uv sync --directory /app/sympy-mcp
+
+RUN npm install -g @jhlee0619/citecheck \
+                   @modelcontextprotocol/server-sequential-thinking \
+                   @modelcontextprotocol/server-memory && \
+    uvx --from paper-search-mcp python -c "import paper_search_mcp" && \
+    (uvx mcpo --help >/dev/null 2>&1 || true)
+
+COPY mcp.docker.json /app/mcp.json
+
+EXPOSE 8001
+CMD ["sh", "-c", ": \"${MCPO_API_KEY:?MCPO_API_KEY is required}\"; exec uvx mcpo --port 8001 --api-key \"$MCPO_API_KEY\" --config /app/mcp.json"]
+

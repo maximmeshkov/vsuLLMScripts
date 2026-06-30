@@ -1,0 +1,127 @@
+# docker-compose.yml
+# Open WebUI + Infinity embeddings/rerank + mcpo MCP tools + MinerU PDF parser.
+# Chat model is served by native LM Studio on Windows and is configured via LMSTUDIO_BASE_URL.
+
+services:
+  open-webui:
+    image: ${OPEN_WEBUI_IMAGE:-ghcr.io/open-webui/open-webui:main}
+    container_name: open-webui
+    restart: unless-stopped
+    depends_on:
+      - infinity
+      - mcpo
+      - mineru
+    ports:
+      - "${WEBUI_BIND:-0.0.0.0}:${WEBUI_PORT:-3000}:8080"
+    extra_hosts:
+      - "host.docker.internal:${HOST_DOCKER_INTERNAL_GATEWAY:-host-gateway}"
+    volumes:
+      - ./data:/app/backend/data
+      - ./papers:/data/papers
+    environment:
+      # Native LM Studio OpenAI-compatible server.
+      OPENAI_API_BASE_URL: ${LMSTUDIO_BASE_URL:-http://host.docker.internal:1234/v1}
+      OPENAI_API_KEY: ${LMSTUDIO_API_KEY:-lm-studio}
+
+      # RAG embeddings are served by Infinity inside the compose network.
+      RAG_EMBEDDING_ENGINE: openai
+      RAG_OPENAI_API_BASE_URL: http://infinity:7997
+      RAG_OPENAI_API_KEY: ${INFINITY_API_KEY:-infinity}
+      RAG_EMBEDDING_MODEL: ${INFINITY_EMBED_MODEL:-BAAI/bge-m3}
+      RAG_EMBEDDING_BATCH_SIZE: ${RAG_EMBEDDING_BATCH_SIZE:-1}
+      RAG_EMBEDDING_CONCURRENT_REQUESTS: ${RAG_EMBEDDING_CONCURRENT_REQUESTS:-1}
+
+      # PDF/document parsing is delegated to the MinerU service in this compose network.
+      CONTENT_EXTRACTION_ENGINE: mineru
+      MINERU_API_MODE: local
+      MINERU_API_URL: http://mineru:8000
+      MINERU_API_TIMEOUT: ${MINERU_API_TIMEOUT:-300}
+      MINERU_PARAMS: ${MINERU_PARAMS:-}
+      MINERU_FILE_EXTENSIONS: ${MINERU_FILE_EXTENSIONS:-pdf}
+
+      # Hybrid search must be enabled for Open WebUI to route retrieved docs through reranking.
+      ENABLE_RAG_HYBRID_SEARCH: ${ENABLE_RAG_HYBRID_SEARCH:-true}
+      ENABLE_RAG_HYBRID_SEARCH_ENRICHED_TEXTS: ${ENABLE_RAG_HYBRID_SEARCH_ENRICHED_TEXTS:-false}
+
+      # RAG reranking is served by the same Infinity container and enabled in Open WebUI.
+      RAG_RERANKING_ENGINE: external
+      RAG_RERANKING_MODEL: ${INFINITY_RERANK_MODEL:-BAAI/bge-reranker-v2-m3}
+      RAG_EXTERNAL_RERANKER_URL: http://infinity:7997/rerank
+      RAG_EXTERNAL_RERANKER_API_KEY: ${INFINITY_API_KEY:-infinity}
+      RAG_EXTERNAL_RERANKER_TIMEOUT: ${RAG_EXTERNAL_RERANKER_TIMEOUT:-30}
+      RAG_RERANKING_BATCH_SIZE: ${RAG_RERANKING_BATCH_SIZE:-32}
+      RAG_TOP_K_RERANKER: ${RAG_TOP_K_RERANKER:-3}
+
+      # mcpo exposes one OpenAPI spec per MCP server; Open WebUI loads them as tool servers.
+      TOOL_SERVER_CONNECTIONS: >-
+        [{"url":"http://mcpo:8001/paper_search","path":"/openapi.json","type":"openapi","auth_type":"bearer","key":"${MCPO_API_KEY:?Set MCPO_API_KEY in .env}","config":{"enable":true},"info":{"id":"paper_search","name":"paper_search","description":"Scientific paper search and download tools"}},{"url":"http://mcpo:8001/citecheck","path":"/openapi.json","type":"openapi","auth_type":"bearer","key":"${MCPO_API_KEY:?Set MCPO_API_KEY in .env}","config":{"enable":true},"info":{"id":"citecheck","name":"citecheck","description":"Citation and bibliography checking tools"}},{"url":"http://mcpo:8001/sequential_thinking","path":"/openapi.json","type":"openapi","auth_type":"bearer","key":"${MCPO_API_KEY:?Set MCPO_API_KEY in .env}","config":{"enable":true},"info":{"id":"sequential_thinking","name":"sequential_thinking","description":"Structured step-by-step reasoning tool"}},{"url":"http://mcpo:8001/memory","path":"/openapi.json","type":"openapi","auth_type":"bearer","key":"${MCPO_API_KEY:?Set MCPO_API_KEY in .env}","config":{"enable":true},"info":{"id":"memory","name":"memory","description":"Local MCP memory tools"}},{"url":"http://mcpo:8001/sympy","path":"/openapi.json","type":"openapi","auth_type":"bearer","key":"${MCPO_API_KEY:?Set MCPO_API_KEY in .env}","config":{"enable":true},"info":{"id":"sympy","name":"sympy","description":"Symbolic math tools through SymPy"}}]
+
+      WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:?Set WEBUI_SECRET_KEY in .env}
+      WEBUI_ADMIN_EMAIL: ${WEBUI_ADMIN_EMAIL:-}
+      WEBUI_ADMIN_PASSWORD: ${WEBUI_ADMIN_PASSWORD:-}
+      WEBUI_ADMIN_NAME: ${WEBUI_ADMIN_NAME:-Admin}
+      ENABLE_SIGNUP: ${ENABLE_SIGNUP:-true}
+      DEFAULT_USER_ROLE: ${DEFAULT_USER_ROLE:-pending}
+
+  infinity:
+    image: ${INFINITY_IMAGE:-michaelf34/infinity:latest}
+    container_name: infinity
+    restart: unless-stopped
+    ports:
+      - "${INTERNAL_BIND:-127.0.0.1}:${INFINITY_PORT:-7997}:7997"
+    volumes:
+      - infinity-cache:/app/.cache/huggingface
+    environment:
+      - HF_HOME=/app/.cache/huggingface
+      - NVIDIA_VISIBLE_DEVICES=${INFINITY_GPU_DEVICES:-all}
+    command:
+      - v2
+      - --model-id
+      - ${INFINITY_EMBED_MODEL:-BAAI/bge-m3}
+      - --model-id
+      - ${INFINITY_RERANK_MODEL:-BAAI/bge-reranker-v2-m3}
+      - --port
+      - "7997"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  mcpo:
+    build:
+      context: .
+      dockerfile: Dockerfile.mcpo
+    container_name: mcpo
+    restart: unless-stopped
+    ports:
+      - "${INTERNAL_BIND:-127.0.0.1}:${MCPO_PORT:-8001}:8001"
+    environment:
+      - MCPO_API_KEY=${MCPO_API_KEY:?Set MCPO_API_KEY in .env}
+    volumes:
+      - ./mcp-data:/data
+
+  mineru:
+    build:
+      context: .
+      dockerfile: Dockerfile.mineru
+    container_name: mineru
+    restart: unless-stopped
+    ports:
+      - "${INTERNAL_BIND:-127.0.0.1}:${MINERU_PORT:-8000}:8000"
+    shm_size: ${MINERU_SHM_SIZE:-32gb}
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=${MINERU_GPU_DEVICES:-all}
+    command: ["mineru-api", "--host", "0.0.0.0", "--port", "8000"]
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+volumes:
+  infinity-cache:

@@ -1,0 +1,15 @@
+.env
+data/
+mcp-data/
+papers/
+hf-cache/
+mineru-env/
+infinity-env/
+pqa-env/
+sympy-mcp/
+.venv/
+venv/
+node_modules/
+__pycache__/
+*.log
+*.tmp

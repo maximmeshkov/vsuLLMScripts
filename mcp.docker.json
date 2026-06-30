@@ -1,0 +1,25 @@
+{
+  "mcpServers": {
+    "paper_search": {
+      "command": "uvx",
+      "args": ["--from", "paper-search-mcp", "python", "-m", "paper_search_mcp.server"]
+    },
+    "citecheck": {
+      "command": "npx",
+      "args": ["-y", "@jhlee0619/citecheck"]
+    },
+    "sequential_thinking": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+    },
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"],
+      "env": { "MEMORY_FILE_PATH": "/data/memory.jsonl" }
+    },
+    "sympy": {
+      "command": "uv",
+      "args": ["run", "--directory", "/app/sympy-mcp", "mcp", "run", "server.py"]
+    }
+  }
+}

@@ -1,0 +1,12 @@
+﻿# keep docker build context tiny - exclude data, models, venvs and secrets
+.env
+data/
+papers/
+hf-cache/
+mcp-data/
+mineru-env/
+infinity-env/
+pqa-env/
+sympy-mcp/
+*.log
+.git/
