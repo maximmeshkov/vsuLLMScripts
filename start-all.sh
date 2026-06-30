@@ -39,11 +39,13 @@ ensure_env_file() {
     exit 1
   fi
   cp .env.example "$ENV_FILE"
-  local webui_secret mcpo_secret
+  local webui_secret mcpo_secret image_rag_secret
   webui_secret="$(new_secret)"
   mcpo_secret="$(new_secret)"
+  image_rag_secret="$(new_secret)"
   sed -i "s|WEBUI_SECRET_KEY=change-me-generate|WEBUI_SECRET_KEY=${webui_secret}|" "$ENV_FILE"
   sed -i "s|MCPO_API_KEY=change-me-generate|MCPO_API_KEY=${mcpo_secret}|" "$ENV_FILE"
+  sed -i "s|IMAGE_RAG_API_KEY=change-me-generate|IMAGE_RAG_API_KEY=${image_rag_secret}|" "$ENV_FILE"
   echo "Created $ENV_FILE from .env.example and generated local secrets."
 }
 
@@ -57,12 +59,27 @@ ensure_env_secrets() {
     sed -i "s|^MCPO_API_KEY=change-me-generate$|MCPO_API_KEY=$(new_secret)|" "$ENV_FILE"
     changed=true
   fi
+  if grep -qx 'IMAGE_RAG_API_KEY=change-me-generate' "$ENV_FILE"; then
+    sed -i "s|^IMAGE_RAG_API_KEY=change-me-generate$|IMAGE_RAG_API_KEY=$(new_secret)|" "$ENV_FILE"
+    changed=true
+  fi
+  if ! grep -q '^IMAGE_RAG_API_KEY=' "$ENV_FILE"; then
+    printf '\nIMAGE_RAG_API_KEY=%s\n' "$(new_secret)" >> "$ENV_FILE"
+    changed=true
+  fi
   if [[ "$changed" == true ]]; then
     echo "Replaced placeholder secrets in $ENV_FILE."
   fi
 }
 
+normalize_env_file() {
+  if [[ -f "$ENV_FILE" ]]; then
+    sed -i 's/\r$//' "$ENV_FILE"
+  fi
+}
+
 load_env() {
+  normalize_env_file
   set -a
   # shellcheck disable=SC1090
   source "$ENV_FILE"
@@ -305,6 +322,7 @@ show_service_debug() {
 }
 
 ensure_env_file
+normalize_env_file
 ensure_env_secrets
 load_env
 
@@ -347,12 +365,15 @@ WEBUI_PORT="${WEBUI_PORT:-3000}"
 INFINITY_PORT="${INFINITY_PORT:-7997}"
 MCPO_PORT="${MCPO_PORT:-8001}"
 MINERU_PORT="${MINERU_PORT:-8000}"
+IMAGE_RAG_PORT="${IMAGE_RAG_PORT:-8010}"
 OPENWEBUI_HEALTH_TRIES="${OPENWEBUI_HEALTH_TRIES:-60}"
 INFINITY_HEALTH_TRIES="${INFINITY_HEALTH_TRIES:-180}"
 MCPO_HEALTH_TRIES="${MCPO_HEALTH_TRIES:-60}"
 MINERU_HEALTH_TRIES="${MINERU_HEALTH_TRIES:-60}"
+IMAGE_RAG_HEALTH_TRIES="${IMAGE_RAG_HEALTH_TRIES:-120}"
 INFINITY_EMBED_MODEL="${INFINITY_EMBED_MODEL:-BAAI/bge-m3}"
 INFINITY_RERANK_MODEL="${INFINITY_RERANK_MODEL:-BAAI/bge-reranker-v2-m3}"
+INFINITY_IMAGE_EMBED_MODEL="${INFINITY_IMAGE_EMBED_MODEL:-jinaai/jina-clip-v1}"
 DOCKER_GPU_SMOKE_TEST="${DOCKER_GPU_SMOKE_TEST:-true}"
 FUNCTIONAL_SMOKE_TEST="${FUNCTIONAL_SMOKE_TEST:-true}"
 
@@ -427,16 +448,18 @@ fi
 
 echo
 echo "Health check"
-owui=false; inf=false; mcp=false; min=false
+owui=false; inf=false; mcp=false; min=false; img=false
 http_ok "http://127.0.0.1:${WEBUI_PORT}" "Open WebUI (:${WEBUI_PORT})" "$OPENWEBUI_HEALTH_TRIES" && owui=true || true
 http_ok "http://127.0.0.1:${INFINITY_PORT}/health" "Infinity (:${INFINITY_PORT})" "$INFINITY_HEALTH_TRIES" && inf=true || true
 http_ok "http://127.0.0.1:${MCPO_PORT}/docs" "mcpo/MCP (:${MCPO_PORT})" "$MCPO_HEALTH_TRIES" && mcp=true || true
 http_ok "http://127.0.0.1:${MINERU_PORT}/docs" "MinerU (:${MINERU_PORT})" "$MINERU_HEALTH_TRIES" && min=true || true
+http_ok "http://127.0.0.1:${IMAGE_RAG_PORT}/health" "image-rag (:${IMAGE_RAG_PORT})" "$IMAGE_RAG_HEALTH_TRIES" && img=true || true
 
 if [[ "$inf" != true ]]; then show_service_debug infinity; fi
 if [[ "$owui" != true ]]; then show_service_debug open-webui; fi
 if [[ "$mcp" != true ]]; then show_service_debug mcpo; fi
 if [[ "$min" != true ]]; then show_service_debug mineru; fi
+if [[ "$img" != true ]]; then show_service_debug image-rag; fi
 
 if [[ "$SKIP_FUNCTIONAL" != true && "$FUNCTIONAL_SMOKE_TEST" != false ]]; then
   echo
@@ -449,6 +472,7 @@ if [[ "$SKIP_FUNCTIONAL" != true && "$FUNCTIONAL_SMOKE_TEST" != false ]]; then
   fi
   json_post_ok "http://127.0.0.1:${INFINITY_PORT}/embeddings" "{\"model\":\"$INFINITY_EMBED_MODEL\",\"input\":[\"test\"]}" "Infinity embeddings" || true
   json_post_ok "http://127.0.0.1:${INFINITY_PORT}/rerank" "{\"model\":\"$INFINITY_RERANK_MODEL\",\"query\":\"scientific writing\",\"documents\":[\"Scientific writing requires citations.\",\"Bananas are yellow.\"]}" "Infinity rerank" || true
+  json_post_ok "http://127.0.0.1:${INFINITY_PORT}/embeddings" "{\"model\":\"$INFINITY_IMAGE_EMBED_MODEL\",\"input\":[\"scientific plot with labeled axes\"]}" "Infinity CLIP text-side embeddings" || true
   smoke_pdf="$(mktemp --suffix=.pdf)"
   if write_smoke_pdf "$smoke_pdf" && mineru_parse_smoke_ok "http://127.0.0.1:${MINERU_PORT}" "$smoke_pdf"; then
     echo "  [OK]   MinerU pipeline PDF parse"
@@ -459,11 +483,11 @@ if [[ "$SKIP_FUNCTIONAL" != true && "$FUNCTIONAL_SMOKE_TEST" != false ]]; then
 fi
 
 echo
-if [[ "$lm_ok" == true && "$owui" == true && "$inf" == true && "$mcp" == true && "$min" == true ]]; then
+if [[ "$lm_ok" == true && "$owui" == true && "$inf" == true && "$mcp" == true && "$min" == true && "$img" == true ]]; then
   echo "ALL CORE SERVICES UP. Open WebUI: http://localhost:${WEBUI_PORT}"
-  echo "Inside Open WebUI use: Infinity http://infinity:7997, MinerU http://mineru:8000, mcpo http://mcpo:8001"
+  echo "Inside Open WebUI use: Infinity http://infinity:7997, MinerU http://mineru:8000, mcpo http://mcpo:8001, image-rag http://image-rag:8010"
 else
   echo "SOME SERVICES DOWN. Useful commands:"
   echo "  docker compose --env-file $ENV_FILE ps"
-  echo "  docker compose --env-file $ENV_FILE logs open-webui infinity mcpo mineru"
+  echo "  docker compose --env-file $ENV_FILE logs open-webui infinity mcpo mineru image-rag"
 fi

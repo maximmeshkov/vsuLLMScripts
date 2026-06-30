@@ -20,7 +20,7 @@ $scriptPath = Convert-ToBashScriptPath $LinuxProjectDir
 $serviceArgs = ""
 foreach ($service in $Services) {
     if ($service -notmatch '^[A-Za-z0-9_.-]+$') {
-        throw "Invalid service name '$service'. Use compose service names like open-webui, mineru, infinity, mcpo."
+        throw "Invalid service name '$service'. Use compose service names like open-webui, mineru, infinity, mcpo, image-rag."
     }
     $serviceArgs += " " + $service
 }

@@ -2,6 +2,7 @@
 data/
 mcp-data/
 papers/
+image-rag-data/
 hf-cache/
 mineru-env/
 infinity-env/

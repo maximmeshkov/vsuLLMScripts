@@ -33,13 +33,16 @@ Docker service names such as `infinity`, `mineru`, and `mcpo` are internal DNS n
 : Web interface, users, chats, documents, RAG configuration, tool servers. This is the only service normally exposed to users on the LAN.
 
 `infinity`
-: Embedding/reranking inference server. It is not a chat LLM. Here it loads `BAAI/bge-m3` for embeddings and `BAAI/bge-reranker-v2-m3` for rerank. Open WebUI calls `http://infinity:7997` and `http://infinity:7997/rerank` inside Docker.
+: Embedding/reranking inference server. It is not a chat LLM. Here it loads `BAAI/bge-m3` for text embeddings, `BAAI/bge-reranker-v2-m3` for rerank, and `jinaai/jina-clip-v1` for CLIP image/text embedding API checks. Open WebUI calls `http://infinity:7997` and `http://infinity:7997/rerank` inside Docker.
 
 `mineru`
 : PDF parsing/OCR/content extraction service. It runs MinerU API in `pipeline` mode by default because that is the stable local/server default for scientific PDFs.
 
 `mcpo`
 : Converts MCP servers into OpenAPI tool servers that Open WebUI can use. The configured tools are `paper_search`, `citecheck`, `sequential_thinking`, `memory`, and `sympy`.
+
+`image-rag`
+: Visual search tool server. It scans PDFs, renders pages to images, extracts embedded raster images, computes CLIP embeddings, stores a local SQLite index under `./image-rag-data`, and exposes a `visual_search` OpenAPI tool to Open WebUI.
 
 `LM Studio`
 : The chat model server. It is deliberately outside Docker because the project is targeting Windows Server with LM Studio as the model host.
@@ -68,7 +71,16 @@ Optional:
 - `Auto unload unused JIT loaded models`: useful on a shared server, but can surprise users if the first request after idle is slow.
 - `Only Keep Last JIT Loaded Model`: disable this if you want to keep multiple loaded models, for example one writing model and one coding model, and you have enough VRAM.
 
-Do not rely on LM Studio MCP settings for this stack. MCP is wired through `mcpo` into Open WebUI. Adding `mcpServers` in LM Studio would make tools available to LM Studio clients, not to Open WebUI RAG/tool workflows. Keeping tools in Open WebUI avoids two competing tool registries.
+This stack already wires MCP into Open WebUI through `mcpo`. Adding `mcpServers` in LM Studio is separate: it makes tools available to LM Studio as an MCP Host, which can matter for LM Studio's own chat/API workflows and for clients that explicitly support LM Studio MCP. It does not replace the Open WebUI `mcpo` wiring.
+
+To add MCP in LM Studio itself:
+
+1. Open `LM Studio -> Program`.
+2. Click `Install -> Edit mcp.json`.
+3. Add only trusted MCP servers.
+4. In `Developer -> Local Server`, enable `Allow calling servers from mcp.json` only if you intend API clients to call those MCP servers.
+
+The repository file `mcp.docker.json` is for the Linux `mcpo` container. Do not paste it blindly into native Windows LM Studio unless the same commands and paths exist on Windows.
 
 ## Models
 
@@ -230,7 +242,57 @@ The deep check tests:
 - LM Studio chat completion;
 - Infinity embeddings;
 - Infinity rerank;
+- Infinity CLIP text-side embeddings;
+- image-RAG visual search API;
 - MinerU PDF parse.
+
+## Visual / Image RAG
+
+The built-in Open WebUI Documents RAG remains text-oriented. The project adds image RAG as a separate OpenAPI tool server named `visual_search`.
+
+What is indexed:
+
+- rendered PDF pages, so vector plots and formulas are visible to CLIP;
+- embedded raster images found inside PDFs.
+
+Where it reads PDFs:
+
+- `./papers`, mounted as `/data/papers`;
+- `./data`, mounted read-only as `/data/openwebui`, so PDFs stored by Open WebUI can be scanned too.
+
+Where it stores the index:
+
+```text
+./image-rag-data/image_rag.sqlite3
+./image-rag-data/thumbs/*.png
+```
+
+Index from PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\image_rag.ps1 -Distro Debian -Action Index
+```
+
+Force re-index:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\image_rag.ps1 -Distro Debian -Action Index -Force
+```
+
+Search from PowerShell:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\image_rag.ps1 -Distro Debian -Action Search -Query "transistor schematic plot" -Limit 5
+```
+
+Inside Open WebUI, the same service appears as the `visual_search` tool server. It is a tool call, not an automatic replacement for standard document retrieval.
+
+Limits:
+
+- it does not yet crop individual semantic figures out of a page;
+- it indexes page renders plus embedded images;
+- if you upload new PDFs, run `/index` again;
+- the default CLIP model is `clip-ViT-B-32` for compatibility. Change `IMAGE_RAG_CLIP_MODEL` only after testing the model with `sentence-transformers`.
 
 ## Live Logs
 
@@ -310,6 +372,14 @@ Model: exact model id shown by LM Studio
 
 If you want a second coding model, load it in LM Studio. If both writing and coding models must stay loaded, disable `Only Keep Last JIT Loaded Model` in LM Studio and make sure VRAM is sufficient.
 
+MCP for coding clients is client-dependent:
+
+- If the VS Code extension only talks to `http://<server-ip>:1234/v1` as an OpenAI-compatible API, it may not automatically get MCP tools.
+- If the extension has its own MCP config, configure MCP there.
+- If the extension supports LM Studio MCP-over-API behavior, configure MCP in LM Studio and enable `Allow calling servers from mcp.json`.
+
+This is why the project keeps Open WebUI tools and LM Studio tools as separate layers.
+
 ## Cleanup Failed Or Old Files
 
 Dry-run failed files:
@@ -349,9 +419,19 @@ RAG:
 ```env
 INFINITY_EMBED_MODEL=BAAI/bge-m3
 INFINITY_RERANK_MODEL=BAAI/bge-reranker-v2-m3
+INFINITY_IMAGE_EMBED_MODEL=jinaai/jina-clip-v1
 RAG_EMBEDDING_BATCH_SIZE=1
 RAG_EMBEDDING_CONCURRENT_REQUESTS=1
 ENABLE_RAG_HYBRID_SEARCH=true
+```
+
+Visual RAG:
+
+```env
+IMAGE_RAG_CLIP_MODEL=clip-ViT-B-32
+IMAGE_RAG_RENDER_DPI=144
+IMAGE_RAG_MAX_PAGES_PER_PDF=80
+IMAGE_RAG_ROOTS=/data/papers,/data/openwebui
 ```
 
 For a powerful server, raise embedding concurrency only after a real folder-upload test:

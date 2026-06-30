@@ -1,5 +1,5 @@
 # docker-compose.yml
-# Open WebUI + Infinity embeddings/rerank + mcpo MCP tools + MinerU PDF parser.
+# Open WebUI + Infinity embeddings/rerank + mcpo MCP tools + MinerU PDF parser + visual image-RAG.
 # Chat model is served by native LM Studio on Windows and is configured via LMSTUDIO_BASE_URL.
 
 services:
@@ -11,6 +11,7 @@ services:
       - infinity
       - mcpo
       - mineru
+      - image-rag
     ports:
       - "${WEBUI_BIND:-0.0.0.0}:${WEBUI_PORT:-3000}:8080"
     extra_hosts:
@@ -54,7 +55,7 @@ services:
 
       # mcpo exposes one OpenAPI spec per MCP server; Open WebUI loads them as tool servers.
       TOOL_SERVER_CONNECTIONS: >-
-        [{"url":"http://mcpo:8001/paper_search","path":"/openapi.json","type":"openapi","auth_type":"bearer","key":"${MCPO_API_KEY:?Set MCPO_API_KEY in .env}","config":{"enable":true},"info":{"id":"paper_search","name":"paper_search","description":"Scientific paper search and download tools"}},{"url":"http://mcpo:8001/citecheck","path":"/openapi.json","type":"openapi","auth_type":"bearer","key":"${MCPO_API_KEY:?Set MCPO_API_KEY in .env}","config":{"enable":true},"info":{"id":"citecheck","name":"citecheck","description":"Citation and bibliography checking tools"}},{"url":"http://mcpo:8001/sequential_thinking","path":"/openapi.json","type":"openapi","auth_type":"bearer","key":"${MCPO_API_KEY:?Set MCPO_API_KEY in .env}","config":{"enable":true},"info":{"id":"sequential_thinking","name":"sequential_thinking","description":"Structured step-by-step reasoning tool"}},{"url":"http://mcpo:8001/memory","path":"/openapi.json","type":"openapi","auth_type":"bearer","key":"${MCPO_API_KEY:?Set MCPO_API_KEY in .env}","config":{"enable":true},"info":{"id":"memory","name":"memory","description":"Local MCP memory tools"}},{"url":"http://mcpo:8001/sympy","path":"/openapi.json","type":"openapi","auth_type":"bearer","key":"${MCPO_API_KEY:?Set MCPO_API_KEY in .env}","config":{"enable":true},"info":{"id":"sympy","name":"sympy","description":"Symbolic math tools through SymPy"}}]
+        [{"url":"http://mcpo:8001/paper_search","path":"/openapi.json","type":"openapi","auth_type":"bearer","key":"${MCPO_API_KEY:?Set MCPO_API_KEY in .env}","config":{"enable":true},"info":{"id":"paper_search","name":"paper_search","description":"Scientific paper search and download tools"}},{"url":"http://mcpo:8001/citecheck","path":"/openapi.json","type":"openapi","auth_type":"bearer","key":"${MCPO_API_KEY:?Set MCPO_API_KEY in .env}","config":{"enable":true},"info":{"id":"citecheck","name":"citecheck","description":"Citation and bibliography checking tools"}},{"url":"http://mcpo:8001/sequential_thinking","path":"/openapi.json","type":"openapi","auth_type":"bearer","key":"${MCPO_API_KEY:?Set MCPO_API_KEY in .env}","config":{"enable":true},"info":{"id":"sequential_thinking","name":"sequential_thinking","description":"Structured step-by-step reasoning tool"}},{"url":"http://mcpo:8001/memory","path":"/openapi.json","type":"openapi","auth_type":"bearer","key":"${MCPO_API_KEY:?Set MCPO_API_KEY in .env}","config":{"enable":true},"info":{"id":"memory","name":"memory","description":"Local MCP memory tools"}},{"url":"http://mcpo:8001/sympy","path":"/openapi.json","type":"openapi","auth_type":"bearer","key":"${MCPO_API_KEY:?Set MCPO_API_KEY in .env}","config":{"enable":true},"info":{"id":"sympy","name":"sympy","description":"Symbolic math tools through SymPy"}},{"url":"http://image-rag:8010","path":"/openapi.json","type":"openapi","auth_type":"bearer","key":"${IMAGE_RAG_API_KEY:?Set IMAGE_RAG_API_KEY in .env}","config":{"enable":true},"info":{"id":"visual_search","name":"visual_search","description":"CLIP visual search over PDF page renders and extracted images"}}]
 
       WEBUI_SECRET_KEY: ${WEBUI_SECRET_KEY:?Set WEBUI_SECRET_KEY in .env}
       WEBUI_ADMIN_EMAIL: ${WEBUI_ADMIN_EMAIL:-}
@@ -80,6 +81,8 @@ services:
       - ${INFINITY_EMBED_MODEL:-BAAI/bge-m3}
       - --model-id
       - ${INFINITY_RERANK_MODEL:-BAAI/bge-reranker-v2-m3}
+      - --model-id
+      - ${INFINITY_IMAGE_EMBED_MODEL:-jinaai/jina-clip-v1}
       - --port
       - "7997"
     deploy:
@@ -102,6 +105,34 @@ services:
       - MCPO_API_KEY=${MCPO_API_KEY:?Set MCPO_API_KEY in .env}
     volumes:
       - ./mcp-data:/data
+
+  image-rag:
+    build:
+      context: .
+      dockerfile: Dockerfile.image-rag
+    container_name: image-rag
+    restart: unless-stopped
+    ports:
+      - "${INTERNAL_BIND:-127.0.0.1}:${IMAGE_RAG_PORT:-8010}:8010"
+    environment:
+      - IMAGE_RAG_API_KEY=${IMAGE_RAG_API_KEY:?Set IMAGE_RAG_API_KEY in .env}
+      - IMAGE_RAG_CLIP_MODEL=${IMAGE_RAG_CLIP_MODEL:-clip-ViT-B-32}
+      - IMAGE_RAG_DEVICE=${IMAGE_RAG_DEVICE:-auto}
+      - IMAGE_RAG_RENDER_DPI=${IMAGE_RAG_RENDER_DPI:-144}
+      - IMAGE_RAG_MAX_PAGES_PER_PDF=${IMAGE_RAG_MAX_PAGES_PER_PDF:-80}
+      - IMAGE_RAG_ROOTS=${IMAGE_RAG_ROOTS:-/data/papers,/data/openwebui}
+      - NVIDIA_VISIBLE_DEVICES=${IMAGE_RAG_GPU_DEVICES:-all}
+    volumes:
+      - ./image-rag-data:/data/index
+      - ./papers:/data/papers:ro
+      - ./data:/data/openwebui:ro
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
 
   mineru:
     build:

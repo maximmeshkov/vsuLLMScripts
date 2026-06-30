@@ -7,7 +7,7 @@ ENV_FILE="${ENV_FILE:-.env}"
 if [[ $# -gt 0 ]]; then
   SERVICES="$*"
 else
-  SERVICES="${SERVICES:-open-webui mineru infinity mcpo}"
+  SERVICES="${SERVICES:-open-webui mineru infinity mcpo image-rag}"
 fi
 
 echo "Watching sci-assistant logs. Press Ctrl+C to stop this window."

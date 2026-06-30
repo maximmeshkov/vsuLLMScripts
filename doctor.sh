@@ -24,7 +24,7 @@ Default checks are read-only and quick:
   Open WebUI wiring, LM Studio reachability, and recent error hints.
 
 Options:
-  --deep       Run functional checks: LM Studio chat, Infinity embeddings/rerank, MinerU PDF parse.
+  --deep       Run functional checks: LM Studio chat, Infinity embeddings/rerank/CLIP, image-RAG, MinerU PDF parse.
   --gpu-smoke  Run Docker CUDA nvidia-smi smoke test. This may pull an image.
 USAGE
       exit 0
@@ -49,6 +49,7 @@ load_env() {
     fail "Missing $ENV_FILE. Run ./start-all.sh once or copy .env.example to .env."
     return 1
   fi
+  sed -i 's/\r$//' "$ENV_FILE"
   set -a
   # shellcheck disable=SC1090
   source "$ENV_FILE"
@@ -302,6 +303,7 @@ if [[ -f docker-compose.yml ]]; then
       'ENABLE_RAG_HYBRID_SEARCH: "true"' \
       'RAG_RERANKING_ENGINE: external' \
       'RAG_EXTERNAL_RERANKER_URL: http://infinity:7997/rerank' \
+      'http://image-rag:8010' \
       'TOOL_SERVER_CONNECTIONS:'; do
       if grep -Fq "$needle" /tmp/sci-assistant-doctor-compose.yml; then
         pass "compose contains $needle"
@@ -374,10 +376,12 @@ WEBUI_PORT="${WEBUI_PORT:-3000}"
 INFINITY_PORT="${INFINITY_PORT:-7997}"
 MCPO_PORT="${MCPO_PORT:-8001}"
 MINERU_PORT="${MINERU_PORT:-8000}"
+IMAGE_RAG_PORT="${IMAGE_RAG_PORT:-8010}"
 http_ok "http://127.0.0.1:${WEBUI_PORT}" && pass "Open WebUI HTTP reachable" || fail "Open WebUI HTTP down"
 http_ok "http://127.0.0.1:${INFINITY_PORT}/health" && pass "Infinity health reachable" || fail "Infinity health down"
 http_ok "http://127.0.0.1:${MCPO_PORT}/docs" && pass "mcpo docs reachable" || fail "mcpo docs down"
 http_ok "http://127.0.0.1:${MINERU_PORT}/docs" && pass "MinerU docs reachable" || fail "MinerU docs down"
+http_ok "http://127.0.0.1:${IMAGE_RAG_PORT}/health" && pass "image-rag health reachable" || fail "image-rag health down"
 
 if [[ "$DEEP" == true ]]; then
   echo
@@ -404,6 +408,23 @@ if [[ "$DEEP" == true ]]; then
   else
     fail "Infinity rerank failed"
   fi
+  if json_post_ok "http://127.0.0.1:${INFINITY_PORT}/embeddings" "{\"model\":\"${INFINITY_IMAGE_EMBED_MODEL:-jinaai/jina-clip-v1}\",\"input\":[\"scientific plot with labeled axes\"]}"; then
+    pass "Infinity CLIP text-side embeddings"
+  else
+    fail "Infinity CLIP text-side embeddings failed"
+  fi
+  image_key="${IMAGE_RAG_API_KEY:-}"
+  if [[ -n "$image_key" && "$image_key" != "change-me-generate" ]]; then
+    if curl -fsS --max-time 10 -H "Authorization: Bearer $image_key" -H "Content-Type: application/json" \
+        -d '{"query":"scientific plot with labeled axes","limit":1}' \
+        "http://127.0.0.1:${IMAGE_RAG_PORT}/search" >/tmp/sci-assistant-image-rag-search.json 2>/dev/null; then
+      pass "image-rag visual search API"
+    else
+      fail "image-rag visual search API failed"
+    fi
+  else
+    warn "IMAGE_RAG_API_KEY missing, skipping image-rag search API"
+  fi
   if mineru_pipeline_smoke_ok; then
     pass "MinerU pipeline PDF parse"
   else
@@ -421,6 +442,6 @@ fail "doctor finished: $fails failure(s), $warns warning(s)"
 echo
 echo "Useful next commands:"
 echo "  docker compose --env-file $ENV_FILE ps"
-echo "  docker compose --env-file $ENV_FILE logs --tail=200 open-webui infinity mcpo mineru"
+echo "  docker compose --env-file $ENV_FILE logs --tail=200 open-webui infinity mcpo mineru image-rag"
 echo "  ./start-all.sh --no-build"
 exit 1

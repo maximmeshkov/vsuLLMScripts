@@ -11,7 +11,7 @@ This is the working plan for moving the stack from local WSL testing to the prod
 
 2. Open WebUI is the user-facing UI and multi-user layer.
 
-3. LM Studio is only the chat-model API. MCP tools are not configured in LM Studio for this stack.
+3. LM Studio is the chat-model API for Open WebUI. MCP tools are configured through `mcpo` for Open WebUI. MCP can also be configured in LM Studio separately if LM Studio itself, or an API client that supports LM Studio MCP, should use tools.
 
 4. MCP tools are exposed through `mcpo` into Open WebUI:
    - `paper_search`
@@ -19,6 +19,9 @@ This is the working plan for moving the stack from local WSL testing to the prod
    - `sequential_thinking`
    - `memory`
    - `sympy`
+   - `visual_search` through the separate `image-rag` OpenAPI service
+
+   Optional LM Studio MCP is a separate tool registry. Do not assume a VS Code OpenAI-compatible client automatically receives LM Studio MCP tools unless that client explicitly supports them.
 
 5. MinerU production default is:
 
@@ -34,6 +37,16 @@ This is the working plan for moving the stack from local WSL testing to the prod
    RAG_EMBEDDING_BATCH_SIZE=1
    RAG_EMBEDDING_CONCURRENT_REQUESTS=1
    ```
+
+7. Visual/image RAG is a separate tool server:
+
+   ```env
+   IMAGE_RAG_CLIP_MODEL=clip-ViT-B-32
+   IMAGE_RAG_RENDER_DPI=144
+   IMAGE_RAG_MAX_PAGES_PER_PDF=80
+   ```
+
+   It indexes rendered PDF pages and embedded raster images under `./image-rag-data`. It does not yet crop individual semantic figures out of pages.
 
 ## Morning Local Retest
 
@@ -178,9 +191,10 @@ Default intended exposure:
 7997/tcp  Infinity    localhost only
 8000/tcp  MinerU      localhost only
 8001/tcp  mcpo        localhost only
+8010/tcp  image-rag   localhost only
 ```
 
-Do not expose `7997`, `8000`, or `8001` to the whole LAN unless there is a specific operational reason.
+Do not expose `7997`, `8000`, `8001`, or `8010` to the whole LAN unless there is a specific operational reason.
 
 ## VS Code / Coding Client Access
 
@@ -195,6 +209,14 @@ Model: exact model id shown by LM Studio
 This talks directly to LM Studio, not Open WebUI.
 
 If a client must use Open WebUI instead, use Open WebUI API keys and its API surface separately. Do not assume every OpenAI-compatible client supports Open WebUI identically.
+
+If the coding client needs MCP tools, use one of these explicit paths:
+
+1. Configure MCP directly in the VS Code/coding client if it supports MCP.
+2. Configure MCP in LM Studio and enable LM Studio's MCP API behavior if that specific client supports it.
+3. Use Open WebUI's tool layer from the browser UI.
+
+These are not interchangeable by default.
 
 ## Items To Revisit After Server Test
 
